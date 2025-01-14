@@ -1,0 +1,799 @@
+import { DurableObjectNamespace, ExecutionContext } from '@cloudflare/workers-types';
+
+export interface Env {
+  GAME_SESSIONS: DurableObjectNamespace;
+  ASSETS: { fetch: (req: Request) => Promise<Response> };
+  __STATIC_CONTENT: { get: (key: string, type: 'text') => Promise<string> };
+  AI: any;
+}
+
+export { GameSession } from './game_session';
+
+const FOOTER_STYLE = `
+    footer {
+        position: fixed;
+        bottom: 0;
+        width: 100%;
+        padding: 10px;
+        background: rgba(48, 48, 48, 0.8);
+        text-align: center;
+        font-size: 14px;
+        color: white;
+    }
+`;
+
+const FOOTER_HTML = `
+    <footer>
+        made w/ ❤️ in san francisco🌁 w/ cloudflare workers ai 🤖 && durable objects
+    </footer>
+`;
+
+const INDEX_HTML = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>BeatSwipe Host</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        #game-container {
+            width: 100%;
+            height: 70vh;
+            background: #111;
+            position: relative;
+            overflow: hidden;
+            border: 2px solid #333;
+        }
+
+        .player {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            transition: all 0.1s ease;
+            z-index: 10;
+            transform: translate(-50%, -50%);
+        }
+
+        .emoji {
+            position: absolute;
+            font-size: 40px;
+            transition: top 0.016s linear;
+            user-select: none;
+            transform: translate(-50%, -50%);
+        }
+
+        .explosion {
+            position: absolute;
+            font-size: 50px;
+            animation: explode 0.5s ease-out forwards;
+            z-index: 5;
+            transform: translate(-50%, -50%);
+        }
+
+        @keyframes explode {
+            0% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 1;
+            }
+            100% {
+                transform: translate(-50%, -50%) scale(2);
+                opacity: 0;
+            }
+        }
+
+        #score {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            font-size: 24px;
+            font-family: monospace;
+        }
+
+        .cactus {
+            position: absolute;
+            font-size: 40px;
+            transition: top 0.016s linear;
+            user-select: none;
+            transform: translate(-50%, -50%);
+            filter: hue-rotate(120deg); /* Make them greenish */
+        }
+
+        .bad-explosion {
+            position: absolute;
+            font-size: 50px;
+            animation: explode 0.5s ease-out forwards;
+            z-index: 5;
+            transform: translate(-50%, -50%);
+            color: #ff0000;
+        }
+
+        #score.negative {
+            color: #ff0000;
+        }
+
+        .player-container {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+
+        .player {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            margin-bottom: 25px;
+        }
+
+        .player-score {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: monospace;
+            white-space: nowrap;
+            position: relative;
+            top: 20px;
+        }
+
+        .player-score.negative {
+            color: #ff0000;
+        }
+
+        #timer {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            font-size: 24px;
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 15px;
+            border-radius: 10px;
+        }
+
+        #leaderboard {
+            position: fixed;
+            right: 20px;
+            top: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+        }
+
+        ${FOOTER_STYLE}
+
+        .nav-links {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+        }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .nav-links a:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+    </style>
+    <script>
+        let ws;
+        const players = new Map();
+        let nextColor = 0;
+        const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+        const emojis = ['🎵', '🎶', '🎸', '🥁', '🎹', '🎺', '🎻', '🎼'];
+        const cacti = ['🌵', '🌵', '🌵'];
+        let gameLoop = null;
+        let gameTimer = null;
+        const GAME_DURATION = 20;
+        let timeLeft = GAME_DURATION;
+
+        function updateTimer() {
+            timeLeft--;
+            document.getElementById('timer').textContent = timeLeft + 's';
+            if (timeLeft <= 0) {
+                console.log('Game ended, saving scores...');
+                stopGame();
+            }
+        }
+
+        function startGame() {
+            if (gameLoop === null && players.size > 0) {
+                console.log('Starting game with', players.size, 'players');
+                timeLeft = GAME_DURATION;
+                gameLoop = setInterval(updateGame, 16);
+                gameTimer = setInterval(updateTimer, 1000);
+                updateTimer();
+            }
+        }
+
+        function stopGame() {
+            if (gameLoop) {
+                clearInterval(gameLoop);
+                gameLoop = null;
+                
+                // Send final scores to leaderboard
+                players.forEach(async (player, playerId) => {
+                    console.log('Sending final score to leaderboard:', {
+                        playerId,
+                        username: player.username,
+                        score: player.score
+                    });
+                    
+                    try {
+                        const response = await fetch('/leaderboard', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                playerId,
+                                username: player.username,
+                                score: player.score
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('Failed to update leaderboard');
+                        }
+                        
+                        console.log('Score saved to leaderboard');
+                    } catch (error) {
+                        console.error('Error saving score:', error);
+                    }
+                });
+            }
+            
+            if (gameTimer) {
+                clearInterval(gameTimer);
+                gameTimer = null;
+            }
+            
+            // Reset timer
+            timeLeft = GAME_DURATION;
+            document.getElementById('timer').textContent = GAME_DURATION + 's';
+            
+            // Start new game after a short delay
+            setTimeout(() => {
+                if (players.size > 0) {
+                    startGame();
+                }
+            }, 1000);
+        }
+
+        function spawnEmoji(isCactus = false) {
+            const container = document.getElementById('game-container');
+            const emoji = document.createElement('div');
+            emoji.className = isCactus ? 'cactus' : 'emoji';
+            emoji.textContent = isCactus ? 
+                cacti[Math.floor(Math.random() * cacti.length)] : 
+                emojis[Math.floor(Math.random() * emojis.length)];
+            emoji.style.left = (Math.random() * container.clientWidth) + 'px';
+            emoji.style.top = '0px';
+            container.appendChild(emoji);
+            return emoji;
+        }
+
+        function createExplosion(x, y, isBad = false) {
+            const explosion = document.createElement('div');
+            explosion.className = isBad ? 'bad-explosion' : 'explosion';
+            explosion.textContent = isBad ? '💀' : '💥';
+            explosion.style.left = x + 'px';
+            explosion.style.top = y + 'px';
+            document.getElementById('game-container').appendChild(explosion);
+            setTimeout(() => explosion.remove(), 500);
+        }
+
+        async function generateUsername() {
+            try {
+                const response = await fetch('/generate-username');
+                const data = await response.json();
+                return data.username || 'Player' + Math.floor(Math.random() * 100);
+            } catch (error) {
+                console.error('Error generating username:', error);
+                return 'Player' + Math.floor(Math.random() * 100);
+            }
+        }
+
+        function handleMove(playerId, x, y) {
+            console.log('Handling move:', { playerId, x, y });
+            const player = players.get(playerId);
+            if (!player) {
+                // Create new player if doesn't exist
+                const container = document.createElement('div');
+                container.className = 'player-container';
+                
+                const playerEl = document.createElement('div');
+                playerEl.className = 'player';
+                playerEl.style.backgroundColor = colors[nextColor % colors.length];
+                
+                const scoreEl = document.createElement('div');
+                scoreEl.className = 'player-score';
+                
+                container.appendChild(playerEl);
+                container.appendChild(scoreEl);
+                document.getElementById('game-container').appendChild(container);
+                
+                // Generate username when creating new player
+                generateUsername().then(username => {
+                    players.set(playerId, {
+                        element: container,
+                        x: 50,
+                        y: 50,
+                        score: 0,
+                        username: username
+                    });
+                    
+                    // Update score display with username
+                    scoreEl.textContent = username + ': 0';
+                    nextColor++;
+                    startGame();
+                });
+            }
+
+            // Update position
+            const updatedPlayer = players.get(playerId);
+            if (updatedPlayer) {
+                const gameContainer = document.getElementById('game-container');
+                updatedPlayer.x = Math.min(Math.max(((x + 90) / 180) * gameContainer.clientWidth, 0), gameContainer.clientWidth);
+                updatedPlayer.y = Math.min(Math.max(((y + 180) / 360) * gameContainer.clientHeight, 0), gameContainer.clientHeight);
+
+                updatedPlayer.element.style.left = updatedPlayer.x + 'px';
+                updatedPlayer.element.style.top = updatedPlayer.y + 'px';
+            }
+        }
+
+        function updateScore(playerId, points) {
+            const player = players.get(playerId);
+            if (player) {
+                player.score += points;
+                const scoreEl = player.element.querySelector('.player-score');
+                scoreEl.textContent = player.username + ': ' + player.score;
+                scoreEl.className = 'player-score' + (player.score < 0 ? ' negative' : '');
+            }
+        }
+
+        function checkCollision(player, emoji) {
+            const playerRect = player.element.getBoundingClientRect();
+            const emojiRect = emoji.getBoundingClientRect();
+            const dx = (playerRect.left + playerRect.right) / 2 - (emojiRect.left + emojiRect.right) / 2;
+            const dy = (playerRect.top + playerRect.bottom) / 2 - (emojiRect.top + emojiRect.bottom) / 2;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance < 50;
+        }
+
+        function updateGame() {
+            const container = document.getElementById('game-container');
+            
+            // Spawn new emojis
+            if (Math.random() < 0.02) {
+                spawnEmoji(Math.random() < 0.3);
+            }
+
+            // Update existing emojis
+            const emojis = container.getElementsByClassName('emoji');
+            const cacti = container.getElementsByClassName('cactus');
+            
+            function updateElements(elements, isCactus) {
+                Array.from(elements).forEach(element => {
+                    const currentTop = parseFloat(element.style.top) || 0;
+                    element.style.top = (currentTop + 2) + 'px';
+
+                    if (currentTop > container.clientHeight) {
+                        element.remove();
+                        return;
+                    }
+
+                    players.forEach((player, playerId) => {
+                        if (checkCollision(player, element)) {
+                            createExplosion(
+                                element.offsetLeft,
+                                element.offsetTop,
+                                isCactus
+                            );
+                            element.remove();
+                            updateScore(playerId, isCactus ? -50 : 10);
+                        }
+                    });
+                });
+            }
+
+            updateElements(emojis, false);
+            updateElements(cacti, true);
+        }
+
+        function connectWebSocket() {
+            console.log('Host connecting...');
+            ws = new WebSocket(\`\${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}/\${window.location.host}/ws\`);
+            
+            ws.onopen = () => {
+                console.log('Host connected, sending host message');
+                ws.send(JSON.stringify({ type: 'host' }));
+                startGame();
+            };
+
+            ws.onmessage = (event) => {
+                console.log('Host received:', event.data);
+                const data = JSON.parse(event.data);
+                if (data.type === 'move') {
+                    handleMove(data.playerId, data.x, data.y);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('Host disconnected');
+                stopGame();
+                setTimeout(connectWebSocket, 1000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('Host WebSocket error:', error);
+            };
+        }
+
+        function removePlayer(playerId) {
+            if (players.has(playerId)) {
+                const player = players.get(playerId);
+                player.element.remove();
+                players.delete(playerId);
+                
+                if (players.size === 0) {
+                    stopGame();
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', connectWebSocket);
+
+        // Add cleanup for disconnected players
+        ws.addEventListener('close', () => {
+            // Clear all players
+            players.forEach(player => player.element.remove());
+            players.clear();
+            nextColor = 0;
+        });
+
+        // Add leaderboard display
+        async function updateLeaderboard() {
+            try {
+                const response = await fetch('/leaderboard');
+                const scores = await response.json();
+                console.log('Fetched leaderboard:', scores);
+                
+                const leaderboardEl = document.getElementById('leaderboard');
+                if (leaderboardEl) {
+                    leaderboardEl.innerHTML = scores
+                        .map((score, index) => 
+                            \`<div>\${index + 1}. \${score.username}: \${score.score}</div>\`)
+                        .join('');
+                }
+            } catch (error) {
+                console.error('Error updating leaderboard:', error);
+            }
+        }
+
+        // Update leaderboard periodically
+        setInterval(updateLeaderboard, 5000);
+    </script>
+</head>
+<body>
+    <div class="nav-links">
+        <a href="/">Game</a>
+        <a href="/leaderboard">Leaderboard</a>
+    </div>
+    <h1>BeatSwipe Host</h1>
+    <div id="game-container"></div>
+    <div id="timer">20s</div>
+    <div id="leaderboard"></div>
+    <div id="qr-section">
+        <h2>Join the game on your phone!</h2>
+        <p>Visit: <a href="/play">/play</a></p>
+    </div>
+    ${FOOTER_HTML}
+</body>
+</html>`;
+
+const PLAY_HTML = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>BeatSwipe Player</title>
+    <style>
+        .nav-links {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+        }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .nav-links a:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+        ${FOOTER_STYLE}
+    </style>
+</head>
+<body>
+    <div class="nav-links">
+        <a href="/">Game</a>
+        <a href="/leaderboard">Leaderboard</a>
+    </div>
+    <div id="status">Connecting...</div>
+    <div id="debug"></div>
+    <script>
+        let ws;
+        const playerId = Math.random().toString(36).substr(2, 9);
+        let lastX = 0, lastY = 0;
+        
+        function connect() {
+            try {
+                console.log('Attempting to connect...');
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = protocol + '//' + window.location.host + '/ws';
+                console.log('WebSocket URL:', wsUrl);
+                
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    console.log('Connected! Player ID:', playerId);
+                    document.getElementById('status').textContent = 'Connected! Swipe to move your dot.';
+                    sendMove(0, 0);
+                };
+                
+                ws.onclose = (event) => {
+                    console.log('WebSocket closed:', event);
+                    document.getElementById('status').textContent = 'Disconnected. Reconnecting...';
+                    setTimeout(connect, 1000);
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                };
+            } catch (error) {
+                console.error('Connection error:', error);
+            }
+        }
+
+        function sendMove(x, y) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                lastX = x;
+                lastY = y;
+                const message = {
+                    type: 'move',
+                    playerId: playerId,
+                    x: x,
+                    y: y
+                };
+                console.log('Sending move:', message);
+                ws.send(JSON.stringify(message));
+            }
+        }
+
+        // Touch-based movement
+        let touchStartX = 0, touchStartY = 0;
+        
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        });
+
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            const touchX = e.touches[0].clientX;
+            const touchY = e.touches[0].clientY;
+            
+            // Calculate relative movement with extremely reduced sensitivity
+            const deltaX = (touchX - touchStartX) * 0.05; // Reduced from 0.1
+            const deltaY = (touchY - touchStartY) * 0.05; // Reduced from 0.1
+            
+            // Update position with smaller movement scale
+            const newX = lastX + (deltaX / window.innerWidth) * 20;  // Reduced from 45
+            const newY = lastY + (deltaY / window.innerHeight) * 40; // Reduced from 90
+            
+            // Send the move with bounds
+            sendMove(
+                Math.max(-90, Math.min(90, newX)),
+                Math.max(-180, Math.min(180, newY))
+            );
+            
+            // Update last position for next movement
+            lastX = newX;
+            lastY = newY;
+            
+            document.getElementById('debug').textContent = 
+                \`x: \${newX.toFixed(2)}, y: \${newY.toFixed(2)}\`;
+        });
+
+        // Reset position on touch end
+        document.addEventListener('touchend', () => {
+            touchStartX = 0;
+            touchStartY = 0;
+        });
+
+        // Start connection when page loads
+        document.addEventListener('DOMContentLoaded', connect);
+    </script>
+    ${FOOTER_HTML}
+</body>
+</html>`;
+
+const LEADERBOARD_HTML = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>BeatSwipe Leaderboard</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .leaderboard {
+            background: #111;
+            padding: 20px;
+            border-radius: 10px;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #333;
+        }
+
+        .entry:nth-child(1) { color: gold; }
+        .entry:nth-child(2) { color: silver; }
+        .entry:nth-child(3) { color: #cd7f32; }
+
+        ${FOOTER_STYLE}
+    </style>
+    <script>
+        async function updateLeaderboard() {
+            try {
+                console.log('Fetching leaderboard...');
+                const response = await fetch('/leaderboard', {
+                    headers: { 
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    }
+                });
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                const scores = await response.json();
+                console.log('Received scores:', scores);
+                
+                const leaderboard = document.getElementById('leaderboard');
+                if (scores && scores.length > 0) {
+                    leaderboard.innerHTML = scores.map((entry, index) => \`
+                        <div class="entry">
+                            <span>#\${index + 1} \${entry.username || 'Anonymous'}</span>
+                            <span>\${entry.score}</span>
+                        </div>
+                    \`).join('');
+                } else {
+                    leaderboard.innerHTML = '<div class="entry">No scores yet!</div>';
+                }
+            } catch (error) {
+                console.error('Error updating leaderboard:', error);
+                document.getElementById('leaderboard').innerHTML = 
+                    '<div class="entry">Error loading scores: ' + error.message + '</div>';
+            }
+        }
+
+        // Update every 5 seconds
+        setInterval(updateLeaderboard, 5000);
+        document.addEventListener('DOMContentLoaded', updateLeaderboard);
+    </script>
+</head>
+<body>
+    <h1>BeatSwipe Leaderboard</h1>
+    <div class="leaderboard" id="leaderboard">
+        Loading...
+    </div>
+    <p><a href="/" style="color: white;">Back to Game</a></p>
+    ${FOOTER_HTML}
+</body>
+</html>`;
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    try {
+      const url = new URL(request.url);
+      console.log('Worker request:', url.pathname);
+
+      // Handle WebSocket upgrade
+      if (request.headers.get("Upgrade") === "websocket") {
+        console.log('WebSocket connection attempt');
+        const id = env.GAME_SESSIONS.idFromName('default');
+        console.log('Created DO ID');
+        const session = env.GAME_SESSIONS.get(id);
+        console.log('Got DO instance');
+        
+        const wsRequest = new Request(request.url, {
+          method: 'GET',
+          headers: { 'Upgrade': 'websocket' }
+        });
+        const response = await session.fetch(wsRequest as any);
+        console.log('Got DO response:', response.status);
+        return response;
+      }
+
+      if (url.pathname === '/generate-username') {
+        const adjectives = ['Melodic', 'Jazzy', 'Funky', 'Groovy', 'Rocking', 'Smooth', 'Electric', 'Acoustic', 'Rhythmic', 'Soulful'];
+        const nouns = ['Drum', 'Guitar', 'Bass', 'Piano', 'Sax', 'Trumpet', 'Beat', 'Rhythm', 'Melody', 'Song'];
+        
+        const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+        const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+        const randomNumber = Math.floor(Math.random() * 99) + 1;
+        
+        const username = `${randomAdjective}${randomNoun}${randomNumber}`;
+        
+        return new Response(JSON.stringify({ username }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (url.pathname === '/' || url.pathname === '/index.html') {
+        return new Response(INDEX_HTML, {
+          headers: { 'Content-Type': 'text/html' }
+        });
+      }
+
+      if (url.pathname === '/play' || url.pathname === '/play.html') {
+        return new Response(PLAY_HTML, {
+          headers: { 'Content-Type': 'text/html' }
+        });
+      }
+
+      if (url.pathname === '/leaderboard') {
+        if (request.headers.get('Accept') === 'application/json') {
+          const id = env.GAME_SESSIONS.idFromName('default');
+          const session = env.GAME_SESSIONS.get(id);
+          return await session.fetch(request.url);
+        }
+        return new Response(LEADERBOARD_HTML, {
+          headers: { 'Content-Type': 'text/html' }
+        });
+      }
+
+      return new Response('Not Found', { status: 404 });
+    } catch (error) {
+      console.error('Worker error:', error);
+      return new Response(JSON.stringify({ error: error.message }), { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+}; 
