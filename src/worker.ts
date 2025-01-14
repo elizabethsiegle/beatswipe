@@ -675,6 +675,24 @@ const LEADERBOARD_HTML = `<!DOCTYPE html>
         .entry:nth-child(2) { color: silver; }
         .entry:nth-child(3) { color: #cd7f32; }
 
+        .nav-links {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+        }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .nav-links a:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+
         ${FOOTER_STYLE}
     </style>
     <script>
@@ -717,6 +735,10 @@ const LEADERBOARD_HTML = `<!DOCTYPE html>
     </script>
 </head>
 <body>
+    <div class="nav-links">
+        <a href="/">Game</a>
+        <a href="/leaderboard">Leaderboard</a>
+    </div>
     <h1>BeatSwipe Leaderboard</h1>
     <div class="leaderboard" id="leaderboard">
         Loading...
@@ -777,10 +799,10 @@ export default {
       }
 
       if (url.pathname === '/leaderboard') {
-        if (request.headers.get('Accept') === 'application/json') {
+        if (request.method === 'POST' || request.headers.get('Accept') === 'application/json') {
           const id = env.GAME_SESSIONS.idFromName('default');
           const session = env.GAME_SESSIONS.get(id);
-          return await session.fetch(request.url);
+          return await session.fetch(request as any);
         }
         return new Response(LEADERBOARD_HTML, {
           headers: { 'Content-Type': 'text/html' }
