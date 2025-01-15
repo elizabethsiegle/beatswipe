@@ -161,6 +161,7 @@ const INDEX_HTML = `<!DOCTYPE html>
             background: rgba(0, 0, 0, 0.7);
             padding: 5px 15px;
             border-radius: 10px;
+            display: none;
         }
 
         #leaderboard {
@@ -192,6 +193,102 @@ const INDEX_HTML = `<!DOCTYPE html>
         .nav-links a:hover {
             background: rgba(0, 0, 0, 0.9);
         }
+
+        .game-end-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .game-end-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            animation: slideIn 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .final-score {
+            font-size: 48px;
+            margin: 20px 0;
+            text-shadow: 0 0 10px #fff;
+            animation: pulse 2s infinite;
+        }
+
+        .leaderboard-title {
+            font-size: 24px;
+            margin: 20px 0;
+            color: #ffd700;
+        }
+
+        .leaderboard-entry {
+            font-size: 18px;
+            margin: 10px 0;
+            opacity: 0;
+            animation: fadeInUp 0.5s forwards;
+        }
+
+        .leaderboard-entry:nth-child(1) { animation-delay: 0.2s; color: gold; }
+        .leaderboard-entry:nth-child(2) { animation-delay: 0.4s; color: silver; }
+        .leaderboard-entry:nth-child(3) { animation-delay: 0.6s; color: #cd7f32; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translate(-50%, -60%);
+                opacity: 0;
+            }
+            to {
+                transform: translate(-50%, -50%);
+                opacity: 1;
+            }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .play-again-btn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+            background: #4CAF50;
+            border: none;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .play-again-btn:hover {
+            background: #45a049;
+            transform: scale(1.1);
+        }
     </style>
     <script>
         let ws;
@@ -204,76 +301,90 @@ const INDEX_HTML = `<!DOCTYPE html>
         let gameTimer = null;
         const GAME_DURATION = 20;
         let timeLeft = GAME_DURATION;
+        let gameStarted = false;
 
         function updateTimer() {
             timeLeft--;
             document.getElementById('timer').textContent = timeLeft + 's';
             if (timeLeft <= 0) {
-                console.log('Game ended, saving scores...');
+                console.log('Game ended, submitting scores...');
                 stopGame();
+                
+                // Clear any remaining emojis
+                const container = document.getElementById('game-container');
+                container.querySelectorAll('.emoji, .cactus').forEach(el => el.remove());
+                
+                // Submit all player scores
+                const promises = Array.from(players.values()).map(player => 
+                    fetch('/leaderboard', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            username: player.username,
+                            score: player.score
+                        })
+                    })
+                );
+
+                // Wait for all scores to be submitted then redirect
+                Promise.all(promises)
+                    .then(() => {
+                        console.log('All scores submitted');
+                        window.location.href = '/leaderboard';
+                    })
+                    .catch(error => {
+                        console.error('Error submitting scores:', error);
+                        window.location.href = '/leaderboard';
+                    });
             }
         }
 
+        function updatePlayerCount() {
+            const count = players.size;
+            const countEl = document.getElementById('player-count');
+            if (countEl) {
+                countEl.textContent = count + ' player' + (count === 1 ? '' : 's') + ' connected';
+                
+                // Update start button state
+                const startBtn = document.getElementById('start-game-btn');
+                if (startBtn) {
+                    startBtn.disabled = count === 0 || gameStarted;
+                }
+            }
+            console.log('Updated player count:', count);
+        }
+
         function startGame() {
-            if (gameLoop === null && players.size > 0) {
-                console.log('Starting game with', players.size, 'players');
-                timeLeft = GAME_DURATION;
-                gameLoop = setInterval(updateGame, 16);
-                gameTimer = setInterval(updateTimer, 1000);
-                updateTimer();
+            if (players.size === 0) return;
+            
+            gameStarted = true;
+            document.getElementById('start-game-btn').disabled = true;
+            document.getElementById('waiting-text').style.display = 'none';
+            document.getElementById('timer').style.display = 'block';
+            
+            timeLeft = GAME_DURATION;
+            gameLoop = setInterval(updateGame, 16);
+            gameTimer = setInterval(updateTimer, 1000);
+            updateTimer();
+
+            // Notify all players game has started
+            if (ws?.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'gameStart' }));
             }
         }
 
         function stopGame() {
+            console.log('Stopping game...');
             if (gameLoop) {
                 clearInterval(gameLoop);
                 gameLoop = null;
-                
-                // Send final scores to leaderboard
-                players.forEach(async (player, playerId) => {
-                    console.log('Sending final score to leaderboard:', {
-                        playerId,
-                        username: player.username,
-                        score: player.score
-                    });
-                    
-                    try {
-                        const response = await fetch('/leaderboard', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                playerId,
-                                username: player.username,
-                                score: player.score
-                            })
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error('Failed to update leaderboard');
-                        }
-                        
-                        console.log('Score saved to leaderboard');
-                    } catch (error) {
-                        console.error('Error saving score:', error);
-                    }
-                });
             }
-            
             if (gameTimer) {
                 clearInterval(gameTimer);
                 gameTimer = null;
             }
-            
-            // Reset timer
-            timeLeft = GAME_DURATION;
-            document.getElementById('timer').textContent = GAME_DURATION + 's';
-            
-            // Start new game after a short delay
-            setTimeout(() => {
-                if (players.size > 0) {
-                    startGame();
-                }
-            }, 1000);
         }
 
         function spawnEmoji(isCactus = false) {
@@ -342,7 +453,7 @@ const INDEX_HTML = `<!DOCTYPE html>
                     // Update score display with username
                     scoreEl.textContent = username + ': 0';
                     nextColor++;
-                    startGame();
+                    updatePlayerCount();
                 });
             }
 
@@ -489,6 +600,41 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         // Update leaderboard periodically
         setInterval(updateLeaderboard, 5000);
+
+        function showGameEnd(scores) {
+            const playerScores = Array.from(players.values())
+                .map(({username, score}) => ({username, score}));
+
+            const content = document.createElement('div');
+            content.className = 'game-end-content';
+            content.innerHTML = 
+                '<h1>Game Over!</h1>' +
+                Array.from(players.values()).map(player => 
+                    '<div class="final-score">' +
+                    player.username + ': ' + player.score +
+                    '</div>'
+                ).join('');
+        }
+
+        function createConfetti() {
+            const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff'];
+            const confetti = document.createElement('div');
+            confetti.style.cssText = \`
+                position: fixed;
+                width: 10px;
+                height: 10px;
+                background: \${colors[Math.floor(Math.random() * colors.length)]};
+                left: \${Math.random() * 100}vw;
+                top: -10px;
+                opacity: 1;
+                transform: rotate(\${Math.random() * 360}deg);
+                pointer-events: none;
+                animation: fall \${Math.random() * 3 + 2}s linear forwards;
+            \`;
+            
+            document.body.appendChild(confetti);
+            setTimeout(() => confetti.remove(), 5000);
+        }
     </script>
 </head>
 <body>
@@ -497,6 +643,9 @@ const INDEX_HTML = `<!DOCTYPE html>
         <a href="/leaderboard">Leaderboard</a>
     </div>
     <h1>BeatSwipe Host</h1>
+    <div id="player-count">0 players connected</div>
+    <button id="start-game-btn" onclick="startGame()" disabled>Start Game</button>
+    <div id="waiting-text">Waiting for players to join...</div>
     <div id="game-container"></div>
     <div id="timer">20s</div>
     <div id="leaderboard"></div>
@@ -512,129 +661,98 @@ const PLAY_HTML = `<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>BeatSwipe Player</title>
     <style>
-        .nav-links {
-            position: fixed;
-            top: 10px;
-            left: 10px;
-            z-index: 100;
-        }
-        .nav-links a {
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #000;
             color: white;
-            text-decoration: none;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px 20px;
-            border-radius: 5px;
-            margin-right: 10px;
+            font-family: Arial, sans-serif;
+            touch-action: none;
         }
-        .nav-links a:hover {
-            background: rgba(0, 0, 0, 0.9);
+        #status {
+            text-align: center;
+            padding: 20px;
+            font-size: 18px;
         }
-        ${FOOTER_STYLE}
+        #game-area {
+            width: 100%;
+            height: 70vh;
+            touch-action: none;
+        }
     </style>
+    <script>
+        const playerId = localStorage.getItem('playerId') || Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('playerId', playerId);
+        
+        let ws = null;
+        let isConnected = false;
+
+        let lastX = 0;
+        let lastY = 0;
+
+        function handleMove(event) {
+            if (!isConnected) return;
+            
+            const touch = event.touches ? event.touches[0] : event;
+            const rect = event.target.getBoundingClientRect();
+            
+            // Only update position if we have a touch/mouse event
+            if (touch) {
+                lastX = ((touch.clientX - rect.left) / rect.width) * 180 - 90;
+                lastY = ((touch.clientY - rect.top) / rect.height) * 360 - 180;
+                
+                ws.send(JSON.stringify({
+                    type: 'move',
+                    playerId,
+                    x: lastX,
+                    y: lastY
+                }));
+            }
+        }
+
+        function connect() {
+            if (ws) return;
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(\`\${protocol}//\${window.location.host}/ws\`);
+            
+            ws.onopen = () => {
+                console.log('Connected');
+                isConnected = true;
+                updateStatus('Connected! Waiting for game to start...');
+                
+                ws.send(JSON.stringify({
+                    type: 'connect',
+                    playerId
+                }));
+            };
+            
+            const gameArea = document.getElementById('game-area');
+            gameArea.addEventListener('touchmove', handleMove);
+            gameArea.addEventListener('mousemove', handleMove);
+        }
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        window.addEventListener('load', connect);
+        window.addEventListener('beforeunload', () => {
+            if (ws) {
+                ws.send(JSON.stringify({
+                    type: 'disconnect',
+                    playerId
+                }));
+            }
+        });
+    </script>
 </head>
 <body>
-    <div class="nav-links">
-        <a href="/">Game</a>
-        <a href="/leaderboard">Leaderboard</a>
-    </div>
     <div id="status">Connecting...</div>
-    <div id="debug"></div>
-    <script>
-        let ws;
-        const playerId = Math.random().toString(36).substr(2, 9);
-        let lastX = 0, lastY = 0;
-        
-        function connect() {
-            try {
-                console.log('Attempting to connect...');
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = protocol + '//' + window.location.host + '/ws';
-                console.log('WebSocket URL:', wsUrl);
-                
-                ws = new WebSocket(wsUrl);
-                
-                ws.onopen = () => {
-                    console.log('Connected! Player ID:', playerId);
-                    document.getElementById('status').textContent = 'Connected! Swipe to move your dot.';
-                    sendMove(0, 0);
-                };
-                
-                ws.onclose = (event) => {
-                    console.log('WebSocket closed:', event);
-                    document.getElementById('status').textContent = 'Disconnected. Reconnecting...';
-                    setTimeout(connect, 1000);
-                };
-
-                ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                };
-            } catch (error) {
-                console.error('Connection error:', error);
-            }
-        }
-
-        function sendMove(x, y) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                lastX = x;
-                lastY = y;
-                const message = {
-                    type: 'move',
-                    playerId: playerId,
-                    x: x,
-                    y: y
-                };
-                console.log('Sending move:', message);
-                ws.send(JSON.stringify(message));
-            }
-        }
-
-        // Touch-based movement
-        let touchStartX = 0, touchStartY = 0;
-        
-        document.addEventListener('touchstart', (e) => {
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
-        });
-
-        document.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            const touchX = e.touches[0].clientX;
-            const touchY = e.touches[0].clientY;
-            
-            // Calculate relative movement with extremely reduced sensitivity
-            const deltaX = (touchX - touchStartX) * 0.05; // Reduced from 0.1
-            const deltaY = (touchY - touchStartY) * 0.05; // Reduced from 0.1
-            
-            // Update position with smaller movement scale
-            const newX = lastX + (deltaX / window.innerWidth) * 20;  // Reduced from 45
-            const newY = lastY + (deltaY / window.innerHeight) * 40; // Reduced from 90
-            
-            // Send the move with bounds
-            sendMove(
-                Math.max(-90, Math.min(90, newX)),
-                Math.max(-180, Math.min(180, newY))
-            );
-            
-            // Update last position for next movement
-            lastX = newX;
-            lastY = newY;
-            
-            document.getElementById('debug').textContent = 
-                \`x: \${newX.toFixed(2)}, y: \${newY.toFixed(2)}\`;
-        });
-
-        // Reset position on touch end
-        document.addEventListener('touchend', () => {
-            touchStartX = 0;
-            touchStartY = 0;
-        });
-
-        // Start connection when page loads
-        document.addEventListener('DOMContentLoaded', connect);
-    </script>
-    ${FOOTER_HTML}
+    <div id="game-area"></div>
 </body>
 </html>`;
 
