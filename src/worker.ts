@@ -34,15 +34,72 @@ const INDEX_HTML = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <title>BeatSwipe Host</title>
     <style>
+        :root {
+            --neon-blue: #00f4fc;
+            --neon-pink: #ff00ff;
+            --neon-yellow: #ffff00;
+        }
+
         body {
-            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Press Start 2P', cursive;
+            text-shadow: 0 0 5px var(--neon-blue);
+        }
+
+        h1 {
+            color: var(--neon-pink);
+            text-align: center;
+            text-transform: uppercase;
+            animation: neonFlicker 1.5s infinite alternate;
+            font-size: 2.5em;
+            margin: 20px 0;
+        }
+
+        #game-container {
+            border: 3px solid var(--neon-blue);
+            box-shadow: 0 0 20px var(--neon-blue),
+                       inset 0 0 20px var(--neon-blue);
+            background: rgba(0, 0, 40, 0.3);
+        }
+
+        .player-score {
+            color: var(--neon-yellow);
+            text-shadow: 0 0 5px var(--neon-yellow);
+            font-family: 'Press Start 2P', cursive;
+        }
+
+        button {
             background: #000;
-            color: white;
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
+            color: var(--neon-pink);
+            border: 2px solid var(--neon-pink);
+            padding: 15px 30px;
+            font-family: 'Press Start 2P', cursive;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-shadow: 0 0 5px var(--neon-pink);
+            box-shadow: 0 0 10px var(--neon-pink);
+        }
+
+        button:hover {
+            background: var(--neon-pink);
+            color: #000;
+            transform: scale(1.1);
+        }
+
+        @keyframes neonFlicker {
+            0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+                text-shadow: 
+                    -0.2rem -0.2rem 1rem #fff,
+                    0.2rem 0.2rem 1rem #fff,
+                    0 0 2rem var(--neon-pink),
+                    0 0 4rem var(--neon-pink),
+                    0 0 6rem var(--neon-pink);
+            }
+            20%, 24%, 55% {
+                text-shadow: none;
+            }
         }
 
         #game-container {
