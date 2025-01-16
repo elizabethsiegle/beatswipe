@@ -414,22 +414,33 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
 
         function startGame() {
-            if (players.size === 0) return;
+            if (gameStarted || players.size === 0) return;
             
+            console.log('Starting game...');
             gameStarted = true;
             document.getElementById('start-game-btn').disabled = true;
             document.getElementById('waiting-text').style.display = 'none';
             document.getElementById('timer').style.display = 'block';
             
             timeLeft = GAME_DURATION;
-            gameLoop = setInterval(updateGame, 16);
-            gameTimer = setInterval(updateTimer, 1000);
             updateTimer();
-
-            // Notify all players game has started
-            if (ws?.readyState === 1) {
-                ws.send(JSON.stringify({ type: 'gameStart' }));
-            }
+            
+            // Only start intervals if game is explicitly started
+            gameLoop = setInterval(() => {
+                if (!gameStarted) {
+                    clearInterval(gameLoop);
+                    return;
+                }
+                updateGame();
+            }, 16);
+            
+            gameTimer = setInterval(() => {
+                if (!gameStarted) {
+                    clearInterval(gameTimer);
+                    return;
+                }
+                updateTimer();
+            }, 1000);
         }
 
         function stopGame() {
@@ -546,11 +557,11 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
 
         function updateGame() {
-            const container = document.getElementById('game-container');
+            if (!gameStarted) return;
             
-            // Spawn new emojis
-            if (Math.random() < 0.02) {
-                spawnEmoji(Math.random() < 0.3);
+            const container = document.getElementById('game-container');
+            if (Math.random() < 0.1) {
+                spawnEmoji(Math.random() < 0.2);
             }
 
             // Update existing emojis
@@ -590,9 +601,8 @@ const INDEX_HTML = `<!DOCTYPE html>
             ws = new WebSocket(\`\${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}/\${window.location.host}/ws\`);
             
             ws.onopen = () => {
-                console.log('Host connected, sending host message');
+                console.log('Host connected');
                 ws.send(JSON.stringify({ type: 'host' }));
-                startGame();
             };
 
             ws.onmessage = (event) => {
