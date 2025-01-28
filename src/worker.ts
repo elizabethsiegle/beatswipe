@@ -400,23 +400,16 @@ const INDEX_HTML = `<!DOCTYPE html>
 
         function updatePlayerCount() {
             const count = players.size;
-            const countEl = document.getElementById('player-count');
-            if (countEl) {
-                countEl.textContent = count + ' player' + (count === 1 ? '' : 's') + ' connected';
+            document.getElementById('player-count').textContent = 
+                count + ' player' + (count === 1 ? '' : 's') + ' connected';
                 
-                // Update start button state
-                const startBtn = document.getElementById('start-game-btn');
-                if (startBtn) {
-                    startBtn.disabled = count === 0 || gameStarted;
-                }
-            }
-            console.log('Updated player count:', count);
+            // Update start button state
+            document.getElementById('start-game-btn').disabled = count === 0 || gameStarted;
         }
 
         function startGame() {
             if (gameStarted || players.size === 0) return;
-            
-            console.log('Starting game...');
+    
             gameStarted = true;
             document.getElementById('start-game-btn').disabled = true;
             document.getElementById('waiting-text').style.display = 'none';
@@ -441,6 +434,9 @@ const INDEX_HTML = `<!DOCTYPE html>
                 }
                 updateTimer();
             }, 1000);
+            if (ws?.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'gameStart' }));
+            }
         }
 
         function stopGame() {
@@ -482,7 +478,8 @@ const INDEX_HTML = `<!DOCTYPE html>
             try {
                 const response = await fetch('/generate-username');
                 const data = await response.json();
-                return data.username || 'Player' + Math.floor(Math.random() * 100);
+                console.log('Generated username:', data);
+                return data || 'Player' + Math.floor(Math.random() * 100);
             } catch (error) {
                 console.error('Error generating username:', error);
                 return 'Player' + Math.floor(Math.random() * 100);
@@ -490,7 +487,6 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
 
         function handleMove(playerId, x, y) {
-            console.log('Handling move:', { playerId, x, y });
             const player = players.get(playerId);
             if (!player) {
                 // Create new player if doesn't exist
@@ -615,7 +611,6 @@ const INDEX_HTML = `<!DOCTYPE html>
 
             ws.onclose = () => {
                 console.log('Host disconnected');
-                stopGame();
                 setTimeout(connectWebSocket, 1000);
             };
 
@@ -625,18 +620,28 @@ const INDEX_HTML = `<!DOCTYPE html>
         }
 
         function removePlayer(playerId) {
-            if (players.has(playerId)) {
-                const player = players.get(playerId);
+            const player = players.get(playerId);
+            if (player) {
                 player.element.remove();
                 players.delete(playerId);
-                
-                if (players.size === 0) {
-                    stopGame();
-                }
+                updatePlayerCount();
             }
+            // if (players.has(playerId)) {
+            //     const player = players.get(playerId);
+            //     player.element.remove();
+            //     players.delete(playerId);
+                
+            //     if (players.size === 0) {
+            //         stopGame();
+            //     }
+            // }
         }
 
-        document.addEventListener('DOMContentLoaded', connectWebSocket);
+        document.addEventListener('DOMContentLoaded', () => {
+            connectWebSocket();
+            updateLeaderboard();
+            setInterval(updateLeaderboard, 5000);
+        });
 
         // Add cleanup for disconnected players
         ws.addEventListener('close', () => {
@@ -644,6 +649,10 @@ const INDEX_HTML = `<!DOCTYPE html>
             players.forEach(player => player.element.remove());
             players.clear();
             nextColor = 0;
+        });
+        window.addEventListener('beforeunload', () => {
+            players.forEach(player => player.element.remove());
+            players.clear();
         });
 
         // Add leaderboard display
@@ -789,7 +798,7 @@ const PLAY_HTML = `<!DOCTYPE html>
             ws.onopen = () => {
                 console.log('Connected');
                 isConnected = true;
-                updateStatus('Connected! Waiting for game to start...');
+                updateStatus('Connected! Tap this screen once, wait 2 seconds, and then move your finger to move around the screen.Waiting for game to start...');
                 
                 ws.send(JSON.stringify({
                     type: 'connect',
@@ -957,18 +966,39 @@ export default {
       }
 
       if (url.pathname === '/generate-username') {
-        const adjectives = ['Melodic', 'Jazzy', 'Funky', 'Groovy', 'Rocking', 'Smooth', 'Electric', 'Acoustic', 'Rhythmic', 'Soulful'];
-        const nouns = ['Drum', 'Guitar', 'Bass', 'Piano', 'Sax', 'Trumpet', 'Beat', 'Rhythm', 'Melody', 'Song'];
+
+        const messages = [
+            { role: "system", content: "You must return only a username contained within <username></username>, and nothing else. If you do not follow these instructions, you will lose the $100." },
+            {
+                role: "user",
+                content: `
+                    Create a single username related to Cloudflare and programming. 
+                    It should contain one word followed by a number, enclosed in <username></username>.
+                    Example: <username>workersai7</username>.
+                    Follow the format exactly and do not return anything outside of the <username> tags or else.`,
+                temperature: 0.6,
+            },
+        ];
         
-        const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-        const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
-        const randomNumber = Math.floor(Math.random() * 99) + 1;
-        
-        const username = `${randomAdjective}${randomNoun}${randomNumber}`;
-        
-        return new Response(JSON.stringify({ username }), {
-          headers: { 'Content-Type': 'application/json' }
+        const ai_response = await env.AI.run("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", { messages }, {
+            gateway: {
+                id: 'beatswipe-gateway',
+            },
         });
+        
+        // TypeScript to parse the username from the response
+        const parseUsername = (response: string): string | null => {
+            // Use regex to match the first occurrence of <username></username>
+            const match = response.match(/<username>(.*?)<\/username>/);
+            return match ? match[1].trim() : null; // Return the first username or null if not found
+        };
+        const username = parseUsername(ai_response.response);
+        console.log('Username:', username);
+        return Response.json(username);
+        
+        // return new Response(JSON.stringify({ username }), {
+        //   headers: { 'Content-Type': 'application/json' }
+        // });
       }
 
       if (url.pathname === '/' || url.pathname === '/index.html') {

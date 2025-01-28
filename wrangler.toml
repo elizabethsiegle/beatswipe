@@ -21,3 +21,9 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_classes = ["GameSession"]
+
+[ai]
+binding = "AI"
+
+[observability.logs]
+enabled = true
