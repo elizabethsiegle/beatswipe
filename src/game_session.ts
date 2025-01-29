@@ -1,7 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
 import { DurableObjectState } from '@cloudflare/workers-types';
-import type { Env } from './worker';
-import { BeatMap, PlayerState, GameState } from './types';
 
 interface PlayerScore {
   username: string;
