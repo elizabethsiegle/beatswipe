@@ -982,8 +982,8 @@ export default {
         
         const ai_response = await env.AI.run("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", { messages }, {
             gateway: {
-                id: 'beatswipe-gateway',
-            },
+                id: "beatswipe-gateway"
+            }
         });
         
         // TypeScript to parse the username from the response

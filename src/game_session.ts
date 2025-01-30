@@ -8,7 +8,12 @@ interface PlayerScore {
 }
 
 export class GameSession {
-  private host: WebSocket | null = null;
+  private hosts: Set<WebSocket> = new Set(); // Multiple hosts can view the game
+  private playerConnections: Map<string, {
+    socket: WebSocket,
+    color: string,
+    username: string
+  }> = new Map();
   private scores: Map<string, PlayerScore> = new Map();
   private usedUsernames: Set<string> = new Set();
   private state: DurableObjectState;
@@ -62,6 +67,27 @@ export class GameSession {
       .slice(0, 10);
   }
 
+  private getRandomColor(): string {
+    const colors = [
+      '#FF0000', '#00FF00', '#0000FF', '#FFFF00', 
+      '#FF00FF', '#00FFFF', '#FFA500', '#800080'
+    ];
+    const usedColors = new Set(
+      Array.from(this.playerConnections.values()).map(p => p.color)
+    );
+    const availableColors = colors.filter(c => !usedColors.has(c));
+    return availableColors.length > 0 
+      ? availableColors[Math.floor(Math.random() * availableColors.length)]
+      : colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  private broadcastToHosts(message: any) {
+    const messageStr = JSON.stringify(message);
+    for (const host of this.hosts) {
+      host.send(messageStr);
+    }
+  }
+
   async fetch(request: Request) {
     const url = new URL(request.url);
     console.log('GameSession handling:', url.pathname);
@@ -78,17 +104,36 @@ export class GameSession {
           const data = JSON.parse(msg.data as string);
           console.log('GameSession received:', data);
           
-          if (data.type === 'move' && this.host) {
-            console.log('Relaying move to host:', data);
-            this.host.send(JSON.stringify({
-              type: 'move',
-              playerId: data.playerId,
-              x: data.x,
-              y: data.y
-            }));
+          if (data.type === 'move') {
+            const playerInfo = this.playerConnections.get(data.playerId);
+            if (playerInfo && this.hosts.size > 0) {
+              this.broadcastToHosts({
+                type: 'move',
+                playerId: data.playerId,
+                username: playerInfo.username,
+                color: playerInfo.color,
+                x: data.x,
+                y: data.y
+              });
+            }
           } else if (data.type === 'host') {
             console.log('Host connected');
-            this.host = server;
+            this.hosts.add(server);
+          } else if (data.type === 'join') {
+            const color = this.getRandomColor();
+            this.playerConnections.set(data.playerId, {
+              socket: server,
+              color,
+              username: data.username
+            });
+            
+            // Notify hosts about new player
+            this.broadcastToHosts({
+              type: 'playerJoined',
+              playerId: data.playerId,
+              username: data.username,
+              color: color
+            });
           }
         } catch (err) {
           console.error('Error handling message:', err);
@@ -97,9 +142,22 @@ export class GameSession {
 
       server.addEventListener("close", () => {
         console.log('WebSocket closed');
-        if (server === this.host) {
-          console.log('Host disconnected');
-          this.host = null;
+        // Remove from hosts if it was a host
+        if (this.hosts.has(server)) {
+          this.hosts.delete(server);
+        }
+        // Remove from players if it was a player
+        for (const [playerId, info] of this.playerConnections.entries()) {
+          if (info.socket === server) {
+            this.playerConnections.delete(playerId);
+            // Notify hosts about player leaving
+            this.broadcastToHosts({
+              type: 'playerLeft',
+              playerId: playerId,
+              username: info.username
+            });
+            break;
+          }
         }
       });
 
